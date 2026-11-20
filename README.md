@@ -18,7 +18,7 @@ Supabase Auth email confirmation may be enabled by default. Configure the Auth e
 Create a **Web Service** connected to the project repository (not a Static Site):
 
 - Runtime: Node
-- Build command: leave empty
+- Build command: `node --check server.mjs`
 - Start command: `node server.mjs`
 - Add the variables from `.env.example` in Render's Environment settings.
 - Set `NODE_ENV=production`. Render supplies `PORT`; the server listens on `0.0.0.0`.
