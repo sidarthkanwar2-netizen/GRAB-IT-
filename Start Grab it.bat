@@ -2,12 +2,12 @@
 cd /d "%~dp0"
 where node >nul 2>&1
 if errorlevel 1 (
-  echo Node.js was not found. Install Node.js 18.17 or newer, then run this file again.
+  echo Node.js 18 or newer was not found. Install Node.js, then run this file again.
   pause
   exit /b 1
 )
 if not exist ".env" (
-  echo The .env file is missing. Keep it beside server.mjs and add your Razorpay Test Mode keys.
+  echo Copy .env.example to .env and fill in your Supabase and Razorpay Test Mode settings.
   pause
   exit /b 1
 )
