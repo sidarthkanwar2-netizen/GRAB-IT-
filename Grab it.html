@@ -4,6 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Grab it — Your campus. Your essentials. On demand.</title>
+<script>
+window.grabitAuthCallback=(async()=>{
+  const params=new URLSearchParams(location.hash.slice(1));
+  const accessToken=params.get('access_token'),refreshToken=params.get('refresh_token');
+  const type=params.get('type'),error=params.get('error_description')||params.get('error_code')||params.get('error');
+  if(!accessToken&&!error)return null;
+  history.replaceState(null,'',location.pathname+location.search);
+  if(error)return {error:error==='otp_expired'?'That confirmation link has expired. Please sign up again or request a new confirmation email.':'Email confirmation could not be completed. Please request a new confirmation email.'};
+  if(!refreshToken||!['signup','email_change','recovery',''].includes(type||''))return {error:'The confirmation link is incomplete. Please request a new confirmation email.'};
+  try{
+    const response=await fetch('/api/auth/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:accessToken,refresh_token:refreshToken})});
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok)throw new Error(result.error||'Email confirmation could not be completed. Please try logging in.');
+    return {confirmed:true};
+  }catch(error){return {error:error.message||'Could not finish signing in. Please try logging in.'}}
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -347,7 +364,14 @@ async function place(){
 $("srch").oninput=e=>{q=e.target.value.toLowerCase().trim();grid()};
 document.onkeydown=e=>{if(e.key==="Escape")closeD()};
 setInterval(()=>{if(document.body.classList.contains("open")&&view==="track")drawer()},1000);
-tabs();grid();badge();refreshAccount();refreshCatalog();
+async function bootstrap(){
+  tabs();grid();badge();
+  const callback=await window.grabitAuthCallback;
+  await Promise.all([refreshAccount(),refreshCatalog()]);
+  if(callback?.confirmed&&user){show('account');const message=$('authErr');if(message)message.textContent='Email confirmed. You’re signed in.'}
+  else if(callback?.error){show('auth');const message=$('authErr');if(message)message.textContent=callback.error}
+}
+bootstrap();
 $("go").onclick=()=>{
   const v=$("email").value.trim(),m=$("msg");
   if(!v){m.textContent="Please enter your email or campus ID.";return}

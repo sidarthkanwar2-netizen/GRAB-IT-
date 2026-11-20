@@ -33,6 +33,18 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(req.method==='GET'&&url.pathname==='/'){if(!htmlPath)return send(res,500,{error:'Website file not found'});return send(res,200,fs.readFileSync(htmlPath,'utf8'),'text/html; charset=utf-8')}
   if(req.method==='GET'&&url.pathname==='/api/config')return send(res,200,{enabled:Boolean(TEST_PAYMENT&&KEY_SECRET),keyId:TEST_PAYMENT?KEY_ID:null,supabaseEnabled:Boolean(SB_URL&&SB_KEY)});
   if(req.method==='GET'&&url.pathname==='/api/products')try{return send(res,200,{products:await supa('products?select=id,name,price,stock,active,category,icon,unit&active=eq.true&order=id')})}catch(e){return send(res,503,{error:e.message})}
+  if(req.method==='POST'&&url.pathname==='/api/auth/session'){
+    if(!SB_URL||!SB_KEY)return send(res,503,{error:'Sign-in is not configured.'});
+    try{
+      const d=await body(req),accessToken=String(d.access_token||''),refreshToken=String(d.refresh_token||'');
+      if(accessToken.length>8192||refreshToken.length>2048||!/^[-A-Za-z0-9._~]+$/.test(accessToken)||!/^[-A-Za-z0-9._~]+$/.test(refreshToken))return send(res,400,{error:'The confirmation link is invalid. Please request a new one.'});
+      const response=await fetch(`${SB_URL}/auth/v1/user`,{headers:{apikey:SB_KEY,Authorization:`Bearer ${accessToken}`},signal:AbortSignal.timeout(10000)});
+      const verified=await response.json().catch(()=>({}));
+      if(!response.ok||!(verified.email_confirmed_at||verified.confirmed_at))return send(res,401,{error:'Email confirmation could not be verified. Please request a new confirmation email.'});
+      const secure=process.env.NODE_ENV==='production'?'; Secure':'';
+      return send(res,200,{user:safeUser(verified)},'application/json; charset=utf-8',{'Set-Cookie':[`grabitr_session=${accessToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600${secure}`,`grabitr_refresh=${refreshToken}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`]});
+    }catch(e){return send(res,400,{error:'Could not finish signing in. Please request a new confirmation email.'})}
+  }
   if(req.method==='POST'&&url.pathname==='/api/auth/signup'||req.method==='POST'&&url.pathname==='/api/auth/login'){
     try{const d=await body(req);if(req.url.includes('signup')){const name=String(d.name||'').trim().slice(0,100),phone=String(d.phone||'').trim();if(!name)throw new Error('Enter your name.');if(!/^[6-9]\d{9}$/.test(phone))throw new Error('Enter a valid 10-digit Indian mobile number.');const out=await auth('/signup',{email:String(d.email||'').trim(),password:String(d.password||''),data:{full_name:name,phone}});if(!out.access_token)return send(res,200,{needsEmailConfirmation:true,message:'Check your email to confirm your account, then log in.'});const secure=process.env.NODE_ENV==='production'?'; Secure':'';return send(res,200,{user:safeUser(out.user)},'application/json; charset=utf-8',{'Set-Cookie':[`grabitr_session=${out.access_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${out.expires_in||3600}${secure}`,`grabitr_refresh=${out.refresh_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`]})}
       const out=await auth('/token?grant_type=password',{email:String(d.email||'').trim(),password:String(d.password||'')});const secure=process.env.NODE_ENV==='production'?'; Secure':'';return send(res,200,{user:safeUser(out.user)},'application/json; charset=utf-8',{'Set-Cookie':[`grabitr_session=${out.access_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${out.expires_in||3600}${secure}`,`grabitr_refresh=${out.refresh_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`]});
