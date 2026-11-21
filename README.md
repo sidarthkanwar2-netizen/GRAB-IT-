@@ -8,7 +8,8 @@ Grab it is served by the included Node.js server. Keep the original `Grab it.htm
 2. Create a Supabase project.
 3. In the Supabase SQL Editor, run `supabase/migrations/202611200001_initial_schema.sql`.
 4. Copy `.env.example` to `.env` and fill in the Supabase project URL, anon/publishable key, and server-only service role key.
-5. For payments, create Razorpay **Test Mode** API keys and enter them in `.env`. The key ID must start with `rzp_test_`; live keys are rejected by the payment endpoints.
+5. For payments, create Razorpay **Test Mode** API keys and enter them in `.env`. The key ID must start with `rzp_test_`; live keys are rejected by the payment endpoints. Set the capture mode to automatic (or ensure payments are captured) so checkout can confirm paid orders.
+6. Create a Razorpay Test Mode webhook pointing to `https://YOUR-RENDER-SERVICE.onrender.com/api/payments/webhook`, subscribe to the `payment.captured` event, and set its webhook secret as `RAZORPAY_WEBHOOK_SECRET` on the Render service. Use the webhook secret from Test Mode, not your API key secret.
 6. Run `node server.mjs`, or use `Start Grab it.bat` on Windows. Open `http://localhost:3000`.
 
 Supabase Auth email confirmation may be enabled by default. Configure the Auth email confirmation and site URL settings in Supabase for the local or deployed URL. Users need to confirm their email if signup returns the confirmation message.
@@ -28,7 +29,7 @@ Never commit `.env`, the Supabase service role key, or a Razorpay secret. The se
 
 ## Accounts, data, and administrator access
 
-Signup/login use Supabase Auth. The browser holds an HttpOnly session cookie; authenticated carts and order history are stored in Supabase. COD and UPI-on-delivery orders are written by the server. Prices are checked against the database product rows when orders are placed; cart values and totals sent by the browser are not trusted. Razorpay orders are stored as pending and marked paid only after the server verifies the signature and checks the captured payment with Razorpay.
+Signup/login use Supabase Auth. The browser holds an HttpOnly session cookie; authenticated carts and order history are stored in Supabase. COD and UPI-on-delivery orders are written by the server. Prices are checked against the database product rows when orders are placed; cart values and totals sent by the browser are not trusted. Razorpay orders are stored as pending and the cart is retained until payment is confirmed. The browser callback verifies the checkout signature and checks the captured payment with Razorpay; the signed `payment.captured` webhook also updates an order if the browser closes or loses its connection.
 
 RLS is enabled for profiles, products, carts, orders, and order items. Users can access their own profile, cart, and orders. Admin operations go through server routes that check the signed-in user's `profiles.role` using a server-only service key. To grant administrator access, first sign in once, then run this statement in the SQL Editor after replacing the email:
 
@@ -43,7 +44,7 @@ The account drawer's Admin dashboard provides order status updates and product n
 
 ## Environment variables
 
-See `.env.example`. The existing archive included a `.env` with a populated Razorpay key ID and secret. Rotate that Razorpay key pair before using the integration, especially if the ZIP was shared or committed anywhere. The extracted secret-bearing `.env` is not included in this working project. No live payment key is needed or accepted.
+See `.env.example`. `RAZORPAY_WEBHOOK_SECRET` is the signing secret configured for the Razorpay webhook, not the API key secret. The existing archive included a `.env` with a populated Razorpay key ID and secret. Rotate that Razorpay key pair before using the integration, especially if the ZIP was shared or committed anywhere. The extracted secret-bearing `.env` is not included in this working project. No live payment key is needed or accepted.
 
 ## Known project constraints
 
