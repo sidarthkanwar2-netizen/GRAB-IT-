@@ -10,7 +10,7 @@ Grab it is served by the included Node.js server. Keep the original `Grab it.htm
 4. Copy `.env.example` to `.env` and fill in the Supabase project URL, anon/publishable key, and server-only service role key.
 5. For payments, create Razorpay **Test Mode** API keys and enter them in `.env`. The key ID must start with `rzp_test_`; live keys are rejected by the payment endpoints. Set the capture mode to automatic (or ensure payments are captured) so checkout can confirm paid orders.
 6. Create a Razorpay Test Mode webhook pointing to `https://YOUR-RENDER-SERVICE.onrender.com/api/payments/webhook`, subscribe to the `payment.captured` event, and set its webhook secret as `RAZORPAY_WEBHOOK_SECRET` on the Render service. Use the webhook secret from Test Mode, not your API key secret.
-6. Run `node server.mjs`, or use `Start Grab it.bat` on Windows. Open `http://localhost:3000`.
+7. Run `node server.mjs`, or use `Start Grab it.bat` on Windows. Open `http://localhost:3000`.
 
 Supabase Auth email confirmation may be enabled by default. Configure the Auth email confirmation and site URL settings in Supabase for the local or deployed URL. Users need to confirm their email if signup returns the confirmation message.
 
