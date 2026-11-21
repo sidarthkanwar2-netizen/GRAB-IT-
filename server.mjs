@@ -59,14 +59,66 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
     if(req.method==='GET'&&url.pathname==='/api/orders')try{const rows=await supa(`orders?user_id=eq.${uid}&select=id,status,total,delivery_method,delivery_point,note,created_at,order_items(product_index,quantity,unit_price)&order=created_at.desc&limit=50`,{token});return send(res,200,{orders:rows})}catch(e){return send(res,500,{error:e.message})}
     if(req.method==='POST'&&url.pathname==='/api/orders')try{const d=await body(req);const result=await createOrder(uid,token,d);return send(res,201,result)}catch(e){return send(res,400,{error:e.message})}
     if(req.method==='POST'&&url.pathname==='/api/payments/order'){
-      if(!TEST_PAYMENT||!KEY_SECRET)return send(res,503,{error:'Razorpay Test Mode keys are not configured (the key ID must begin rzp_test_).'});try{const d=await body(req);const draft=await createOrder(uid,token,{...d,delivery_method:'Razorpay',status:'payment_pending'});const rp=await razor('/orders','POST',{amount:draft.amount,currency:'INR',receipt:`gi_${crypto.randomBytes(8).toString('hex')}`});const rr=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${draft.id}`,{method:'PATCH',headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({razorpay_order_id:rp.id})});if(!rr.ok)throw new Error('Could not link payment to the saved order.');return send(res,200,{orderId:rp.id,amount:rp.amount,currency:rp.currency,keyId:KEY_ID,dbOrderId:draft.id})}catch(e){return send(res,400,{error:e.message})}}
+      if(!TEST_PAYMENT||!KEY_SECRET)return send(res,503,{error:'Razorpay Test Mode keys are not configured (the key ID must begin rzp_test_).'});
+      let draft;
+      try{
+        const d=await body(req);
+        // Keep the saved cart until Razorpay confirms a captured payment.
+        draft=await createOrder(uid,token,{...d,delivery_method:'Razorpay',status:'payment_pending'},{clearCart:false});
+        const rp=await razor('/orders','POST',{amount:draft.amount,currency:'INR',receipt:`gi_${crypto.randomBytes(8).toString('hex')}`});
+        const linked=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(draft.id)}&user_id=eq.${encodeURIComponent(uid)}&status=eq.payment_pending`,{
+          method:'PATCH',
+          headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=representation'},
+          body:JSON.stringify({razorpay_order_id:rp.id})
+        });
+        const linkedRows=await linked.json().catch(()=>[]);
+        if(!linked.ok||!Array.isArray(linkedRows)||linkedRows.length!==1)throw new Error('Could not securely link the Razorpay order to your saved order.');
+        return send(res,200,{orderId:rp.id,amount:rp.amount,currency:rp.currency,keyId:KEY_ID,dbOrderId:draft.id});
+      }catch(e){
+        // Remove an unpaid draft if checkout setup failed; the customer's cart remains intact.
+        if(draft?.id)await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(draft.id)}&user_id=eq.${encodeURIComponent(uid)}&status=eq.payment_pending&payment_status=eq.pending`,{
+          method:'DELETE',
+          headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`}
+        }).catch(()=>{});
+        return send(res,400,{error:e.message});
+      }
+    }
     if(req.method==='POST'&&url.pathname==='/api/payments/verify'){
-      if(!TEST_PAYMENT||!KEY_SECRET)return send(res,503,{error:'Razorpay Test Mode keys are not configured.'});try{const d=await body(req);const orderId=String(d.razorpay_order_id||''),paymentId=String(d.razorpay_payment_id||''),signature=String(d.razorpay_signature||'');const rows=await supa(`orders?user_id=eq.${uid}&razorpay_order_id=eq.${orderId}&select=id,total,status&limit=1`,{token});const order=rows?.[0];if(!order)return send(res,400,{error:'This checkout could not be matched to your order.'});const expected=crypto.createHmac('sha256',KEY_SECRET).update(`${orderId}|${paymentId}`).digest('hex');if(!/^[a-f0-9]{64}$/i.test(signature)||!crypto.timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(signature,'hex')))return send(res,400,{error:'Payment verification failed.'});const p=await razor(`/payments/${encodeURIComponent(paymentId)}`);if(p.order_id!==orderId||p.amount!==Number(order.total)*100||p.currency!=='INR'||p.status!=='captured')return send(res,402,{error:'Payment is not confirmed as captured.'});const ur=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${order.id}`,{method:'PATCH',headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=minimal'},body:JSON.stringify({status:'received',payment_status:'paid',razorpay_payment_id:paymentId})});if(!ur.ok)throw new Error('Payment verified but the order status could not be updated. Contact support with your payment ID.');return send(res,200,{verified:true,order:await getOrder(order.id,token)})}catch(e){return send(res,400,{error:e.message})}}
+      if(!TEST_PAYMENT||!KEY_SECRET)return send(res,503,{error:'Razorpay Test Mode keys are not configured.'});
+      try{
+        const d=await body(req);
+        const orderId=String(d.razorpay_order_id||''),paymentId=String(d.razorpay_payment_id||''),signature=String(d.razorpay_signature||'');
+        if(!/^order_[A-Za-z0-9]+$/.test(orderId)||!/^pay_[A-Za-z0-9]+$/.test(paymentId)||!/^[a-f0-9]{64}$/i.test(signature))return send(res,400,{error:'The payment confirmation details are invalid.'});
+        const rows=await supa(`orders?user_id=eq.${encodeURIComponent(uid)}&razorpay_order_id=eq.${encodeURIComponent(orderId)}&select=id,total,status,payment_status,razorpay_payment_id&limit=1`,{token});
+        const order=rows?.[0];
+        if(!order)return send(res,400,{error:'This checkout could not be matched to your order.'});
+        // Make repeated browser callbacks safe without allowing a different payment to reuse the order.
+        if(order.payment_status==='paid'&&order.razorpay_payment_id===paymentId)return send(res,200,{verified:true,order:await getOrder(order.id,token)});
+        if(order.status!=='payment_pending'||order.payment_status!=='pending')return send(res,409,{error:'This order is no longer awaiting payment.'});
+        const expected=crypto.createHmac('sha256',KEY_SECRET).update(`${orderId}|${paymentId}`).digest('hex');
+        if(!crypto.timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(signature,'hex')))return send(res,400,{error:'Payment signature verification failed.'});
+        const p=await razor(`/payments/${encodeURIComponent(paymentId)}`);
+        if(p.order_id!==orderId||p.amount!==Number(order.total)*100||p.currency!=='INR'||p.status!=='captured')return send(res,402,{error:'Payment is not confirmed as captured.'});
+        const ur=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(order.id)}&user_id=eq.${encodeURIComponent(uid)}&status=eq.payment_pending&payment_status=eq.pending`,{
+          method:'PATCH',
+          headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=representation'},
+          body:JSON.stringify({status:'received',payment_status:'paid',razorpay_payment_id:paymentId})
+        });
+        const updated=await ur.json().catch(()=>[]);
+        if(!ur.ok)throw new Error('Payment verified, but the order status could not be updated. Contact support with your payment ID.');
+        if(!Array.isArray(updated)||updated.length!==1){
+          const latest=await supa(`orders?user_id=eq.${encodeURIComponent(uid)}&id=eq.${encodeURIComponent(order.id)}&select=payment_status,razorpay_payment_id&limit=1`,{token});
+          if(latest?.[0]?.payment_status!=='paid'||latest[0]?.razorpay_payment_id!==paymentId)return send(res,409,{error:'The order payment state changed. Please contact support with your payment ID.'});
+        }
+        await supa(`carts?user_id=eq.${encodeURIComponent(uid)}`,{method:'DELETE',token,prefer:'return=minimal'});
+        return send(res,200,{verified:true,order:await getOrder(order.id,token)});
+      }catch(e){return send(res,400,{error:e.message})}
+    }
     if(url.pathname.startsWith('/api/admin'))return admin(req,res,session,url);
   }
   return send(res,404,{error:'Not found'});
 }
-async function createOrder(uid,token,d){
+async function createOrder(uid,token,d,{clearCart=true}={}){
   if(!SB_SERVICE)throw new Error('Orders need SUPABASE_SERVICE_ROLE_KEY configured on the server.');
   if(!Array.isArray(d.items)||!d.items.length||d.items.length>30)throw new Error('Your cart is empty or invalid.');const items=d.items.map(x=>[Number(x[0]),Number(x[1])]);if(items.some(([i,n])=>!Number.isInteger(i)||i<0||!Number.isInteger(n)||n<1||n>20))throw new Error('A cart item is invalid.');
   const name=String(d.name||'').trim().slice(0,100),phone=String(d.phone||'').trim(),drop=String(d.drop||'');if(!name||!/^[6-9]\d{9}$/.test(phone)||!drops.includes(drop))throw new Error('Check your name, 10-digit Indian phone number, and drop-off point.');
@@ -76,7 +128,7 @@ async function createOrder(uid,token,d){
   const base={apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=representation'};
   const response=await fetch(`${SB_URL}/rest/v1/orders`,{method:'POST',headers:base,body:JSON.stringify({user_id:uid,customer_name:name,phone,delivery_point:drop,note:String(d.note||'').trim().slice(0,200),delivery_method:pay,total,status:d.status==='payment_pending'?'payment_pending':'received',payment_status:d.status==='payment_pending'?'pending':'unpaid'})});const created=await response.json();if(!response.ok)throw new Error(created.message||'Could not save your order.');const order=created[0];
   const ir=await fetch(`${SB_URL}/rest/v1/order_items`,{method:'POST',headers:{...base,Prefer:'return=minimal'},body:JSON.stringify(items.map(([i,n])=>({order_id:order.id,product_index:i,quantity:n,unit_price:byId.get(i).price})))});if(!ir.ok){await fetch(`${SB_URL}/rest/v1/orders?id=eq.${order.id}`,{method:'DELETE',headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`}});throw new Error('Could not save order items. Please try again.');}
-  await supa(`carts?user_id=eq.${uid}`,{method:'DELETE',token,prefer:'return=minimal'});return {id:order.id,amount:total*100,order:await getOrder(order.id,token)};
+  if(clearCart)await supa(`carts?user_id=eq.${uid}`,{method:'DELETE',token,prefer:'return=minimal'});return {id:order.id,amount:total*100,order:await getOrder(order.id,token)};
 }
 async function getOrder(id,token){const r=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${id}&select=id,status,total,delivery_method,delivery_point,note,created_at,order_items(product_index,quantity,unit_price)&limit=1`,{headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`}});const rows=await r.json();return rows?.[0]||null}
 async function admin(req,res,session,url){if(!SB_SERVICE)return send(res,503,{error:'Admin features require SUPABASE_SERVICE_ROLE_KEY on the server.'});try{const r=await fetch(`${SB_URL}/rest/v1/profiles?user_id=eq.${session.user.id}&select=role&limit=1`,{headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`}});const p=await r.json();if(!r.ok||p?.[0]?.role!=='admin')return send(res,403,{error:'Admin access required.'});const endpoint=url.pathname.slice('/api/admin'.length);
