@@ -32,7 +32,11 @@ async function razor(pathname,method='GET',payload){const a=Buffer.from(`${KEY_I
 function safeUser(u){return {id:u.id,email:u.email,user_metadata:u.user_metadata||{}}}
 async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(req.method==='GET'&&url.pathname==='/'){if(!htmlPath)return send(res,500,{error:'Website file not found'});return send(res,200,fs.readFileSync(htmlPath,'utf8'),'text/html; charset=utf-8')}
-  if(req.method==='GET'&&url.pathname==='/api/config')return send(res,200,{enabled:Boolean(TEST_PAYMENT&&KEY_SECRET),keyId:TEST_PAYMENT?KEY_ID:null,supabaseEnabled:Boolean(SB_URL&&SB_KEY)});
+  if(req.method==='GET'&&url.pathname==='/api/config'){
+    const supabaseReady=Boolean(SB_URL&&SB_KEY),orderStorageReady=Boolean(SB_SERVICE),razorpayReady=Boolean(TEST_PAYMENT&&KEY_SECRET),webhookReady=Boolean(WEBHOOK_SECRET);
+    const paymentsReady=Boolean(supabaseReady&&orderStorageReady&&razorpayReady);
+    return send(res,200,{enabled:paymentsReady,keyId:paymentsReady?KEY_ID:null,mode:KEY_ID?(TEST_PAYMENT?'test':'live_disabled'):'unconfigured',supabaseEnabled:supabaseReady,orderStorageEnabled:orderStorageReady,razorpayEnabled:razorpayReady,webhookEnabled:webhookReady});
+  }
   if(req.method==='POST'&&url.pathname==='/api/payments/webhook'){
     if(!WEBHOOK_SECRET||!SB_URL||!SB_SERVICE)return send(res,503,{error:'Payment webhook is not configured.'});
     try{
