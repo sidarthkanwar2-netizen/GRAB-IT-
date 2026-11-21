@@ -12,12 +12,12 @@ if (fs.existsSync(envPath)) for (const line of fs.readFileSync(envPath,'utf8').s
 }
 const PORT=Number(process.env.PORT||3000), MAX_BODY=65536;
 const SB_URL=(process.env.SUPABASE_URL||'').replace(/\/$/,''), SB_KEY=process.env.SUPABASE_ANON_KEY||process.env.SUPABASE_PUBLISHABLE_KEY||'', SB_SERVICE=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
-const KEY_ID=process.env.RAZORPAY_KEY_ID||'', KEY_SECRET=process.env.RAZORPAY_KEY_SECRET||'';
+const KEY_ID=process.env.RAZORPAY_KEY_ID||'', KEY_SECRET=process.env.RAZORPAY_KEY_SECRET||'', WEBHOOK_SECRET=process.env.RAZORPAY_WEBHOOK_SECRET||'';
 const TEST_PAYMENT=KEY_ID.startsWith('rzp_test_');
 const drops=['Hostel Block A gate','Hostel Block B gate','Hostel Block C gate','Library entrance','Academic block lobby','Canteen','Staff room corridor'];
 const products=[['Cola 250 ml',20],['Packaged water',20],['Cream biscuits',25],['Potato chips',20],['Chocolate bar',40],['Gel pens',50],['Ruled notebook',60],['Plastic file',30],['A4 paper',35],['Highlighters',80],['USB-C cable',149],['AA batteries',90],['Wired earphones',199],['Pen drive 32 GB',350],['Wired mouse',299],['Soap bar',35],['Hand wash',60],['Toothbrush',30],['Tissue pack',40],['Face wash',110],['B&W printout',2],['Colour printout',8],['Spiral binding',40],['Assignment folder',45],['Chart paper',20],['Torch',120],['Sticky notes',40],['Umbrella',250],['Water bottle',150],['Stapler + pins',70]];
 const send=(res,status,data,type='application/json; charset=utf-8',headers={})=>{res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',...(res.refreshCookie?{'Set-Cookie':res.refreshCookie}:{}),...headers});res.end(type.startsWith('application/json')?JSON.stringify(data):data)};
-function body(req){return new Promise((resolve,reject)=>{let raw='',size=0;req.on('data',c=>{size+=c.length;if(size>MAX_BODY){reject(new Error('Request too large'));req.destroy();return}raw+=c});req.on('end',()=>{try{resolve(JSON.parse(raw||'{}'))}catch{reject(new Error('Invalid JSON'))}});req.on('error',reject)})}
+function rawBody(req){return new Promise((resolve,reject)=>{const chunks=[];let size=0;req.on('data',chunk=>{size+=chunk.length;if(size>MAX_BODY){reject(new Error('Request too large'));req.destroy();return}chunks.push(chunk)});req.on('end',()=>resolve(Buffer.concat(chunks)));req.on('error',reject)})}\nfunction body(req){return rawBody(req).then(raw=>{try{return JSON.parse(raw.toString('utf8')||'{}')}catch{throw new Error('Invalid JSON')}})}
 function cookie(req,name='grabitr_session'){return (req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(`${name}=`))?.slice(name.length+1)||''}
 async function supa(endpoint,{method='GET',token='',body:payload,prefer}={}){
   if(!SB_URL||!SB_KEY)throw new Error('Supabase is not configured. Follow README.md to add the project URL and anon key.');
@@ -32,6 +32,39 @@ function safeUser(u){return {id:u.id,email:u.email,user_metadata:u.user_metadata
 async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(req.method==='GET'&&url.pathname==='/'){if(!htmlPath)return send(res,500,{error:'Website file not found'});return send(res,200,fs.readFileSync(htmlPath,'utf8'),'text/html; charset=utf-8')}
   if(req.method==='GET'&&url.pathname==='/api/config')return send(res,200,{enabled:Boolean(TEST_PAYMENT&&KEY_SECRET),keyId:TEST_PAYMENT?KEY_ID:null,supabaseEnabled:Boolean(SB_URL&&SB_KEY)});
+  if(req.method==='POST'&&url.pathname==='/api/payments/webhook'){
+    if(!WEBHOOK_SECRET||!SB_URL||!SB_SERVICE)return send(res,503,{error:'Payment webhook is not configured.'});
+    try{
+      const raw=await rawBody(req),signature=String(req.headers['x-razorpay-signature']||'');
+      if(!/^[a-f0-9]{64}$/i.test(signature))return send(res,400,{error:'Invalid webhook signature.'});
+      const expected=crypto.createHmac('sha256',WEBHOOK_SECRET).update(raw).digest('hex');
+      if(!crypto.timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(signature,'hex')))return send(res,400,{error:'Webhook signature verification failed.'});
+      const event=JSON.parse(raw.toString('utf8')||'{}');
+      if(event.event!=='payment.captured')return send(res,200,{received:true,ignored:true});
+      const payment=event.payload?.payment?.entity;
+      if(!payment?.order_id||!payment?.id||payment.status!=='captured'||payment.currency!=='INR'||!Number.isInteger(payment.amount))return send(res,400,{error:'Captured payment payload is incomplete.'});
+      const headers={apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`};
+      const found=await fetch(`${SB_URL}/rest/v1/orders?razorpay_order_id=eq.${encodeURIComponent(payment.order_id)}&select=id,total,status,payment_status,razorpay_payment_id&limit=1`,{headers});
+      const rows=await found.json().catch(()=>[]);
+      if(!found.ok||!rows[0])return send(res,404,{error:'Matching order not found.'});
+      const order=rows[0];
+      if(payment.amount!==Number(order.total)*100)return send(res,400,{error:'Captured payment amount does not match the order.'});
+      if(order.payment_status==='paid'&&order.razorpay_payment_id===payment.id)return send(res,200,{received:true,alreadyProcessed:true});
+      if(order.status!=='payment_pending'||order.payment_status!=='pending')return send(res,409,{error:'Order is not awaiting payment.'});
+      const updated=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(order.id)}&status=eq.payment_pending&payment_status=eq.pending`,{
+        method:'PATCH',headers:{...headers,'Content-Type':'application/json',Prefer:'return=representation'},
+        body:JSON.stringify({status:'received',payment_status:'paid',razorpay_payment_id:payment.id})
+      });
+      const changed=await updated.json().catch(()=>[]);
+      if(!updated.ok)return send(res,500,{error:'Could not update the paid order.'});
+      if(!Array.isArray(changed)||changed.length!==1){
+        const latest=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(order.id)}&select=payment_status,razorpay_payment_id&limit=1`,{headers});
+        const currentRows=await latest.json().catch(()=>[]);
+        if(currentRows?.[0]?.payment_status!=='paid'||currentRows[0]?.razorpay_payment_id!==payment.id)return send(res,409,{error:'Order payment state changed.'});
+      }
+      return send(res,200,{received:true});
+    }catch(e){return send(res,400,{error:e.message||'Webhook processing failed.'})}
+  }
   if(req.method==='GET'&&url.pathname==='/api/products')try{return send(res,200,{products:await supa('products?select=id,name,price,stock,active,category,icon,unit&active=eq.true&order=id')})}catch(e){return send(res,503,{error:e.message})}
   if(req.method==='POST'&&url.pathname==='/api/auth/session'){
     if(!SB_URL||!SB_KEY)return send(res,503,{error:'Sign-in is not configured.'});
