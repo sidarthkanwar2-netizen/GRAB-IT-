@@ -29,6 +29,13 @@ async function supa(endpoint,{method='GET',token='',body:payload,prefer}={}){
 async function auth(pathname,payload){if(!SB_URL||!SB_KEY)throw new Error('Supabase is not configured. Follow README.md to add the project URL and anon key.');const r=await fetch(`${SB_URL}/auth/v1${pathname}`,{method:'POST',headers:{apikey:SB_KEY,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.msg||d.message||d.error_description||'Authentication failed');return d}
 async function current(req,res){let token=cookie(req);if(!token||!SB_URL||!SB_KEY)return null;let r=await fetch(`${SB_URL}/auth/v1/user`,{headers:{apikey:SB_KEY,Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(10000)});if(r.ok)return {token,user:await r.json()};const refresh=cookie(req,'grabitr_refresh');if(!refresh)return null;const rr=await fetch(`${SB_URL}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:SB_KEY,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:refresh}),signal:AbortSignal.timeout(10000)});const next=await rr.json().catch(()=>({}));if(!rr.ok||!next.access_token)return null;const secure=process.env.NODE_ENV==='production'?'; Secure':'';res.refreshCookie=[`grabitr_session=${next.access_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${next.expires_in||3600}${secure}`,`grabitr_refresh=${next.refresh_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`];return {token:next.access_token,user:next.user}}
 async function razor(pathname,method='GET',payload){const a=Buffer.from(`${KEY_ID}:${KEY_SECRET}`).toString('base64');const r=await fetch(`https://api.razorpay.com/v1${pathname}`,{method,headers:{Authorization:`Basic ${a}`,'Content-Type':'application/json'},body:payload?JSON.stringify(payload):undefined,signal:AbortSignal.timeout(15000)});const d=await r.json().catch(()=>({}));if(!r.ok){const error=new Error(d.error?.description||'Payment provider request failed');error.providerStatus=r.status;error.providerCode=d.error?.code||null;throw error}return d}
+async function supabaseKeyCheck(key,table){
+  if(!SB_URL||!key)return {configured:false,valid:false,status:null};
+  try{
+    const r=await fetch(`${SB_URL}/rest/v1/${table}?select=id&limit=0`,{headers:{apikey:key,Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(10000)});
+    return {configured:true,valid:r.ok,status:r.status};
+  }catch{return {configured:true,valid:false,status:null}}
+}
 function safeUser(u){return {id:u.id,email:u.email,user_metadata:u.user_metadata||{}}}
 async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(req.method==='GET'&&url.pathname==='/'){if(!htmlPath)return send(res,500,{error:'Website file not found'});return send(res,200,fs.readFileSync(htmlPath,'utf8'),'text/html; charset=utf-8')}
@@ -92,9 +99,10 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(url.pathname.startsWith('/api/')&&url.pathname!=='/api/config'){
     let session;try{session=await current(req,res)}catch{}if(!session)return send(res,401,{error:'Please log in to continue.'});const uid=session.user.id,token=session.token;
     if(req.method==='GET'&&url.pathname==='/api/payments/diagnostic'){
-      if(!TEST_PAYMENT||!KEY_SECRET)return send(res,200,{ok:false,reason:'test_keys_missing'});
-      try{await razor('/orders?count=1');return send(res,200,{ok:true,mode:'test'})}
-      catch(e){return send(res,200,{ok:false,reason:e.providerStatus?'provider_rejected_request':'provider_unreachable',status:e.providerStatus||null,code:e.providerCode||null})}
+      const razorpay={configured:Boolean(TEST_PAYMENT&&KEY_SECRET),valid:false,status:null,code:null};
+      if(razorpay.configured)try{await razor('/orders?count=1');razorpay.valid=true;razorpay.status=200}catch(e){razorpay.status=e.providerStatus||null;razorpay.code=e.providerCode||null}
+      const [anonKey,serviceRoleKey]=await Promise.all([supabaseKeyCheck(SB_KEY,'products'),supabaseKeyCheck(SB_SERVICE,'orders')]);
+      return send(res,200,{mode:TEST_PAYMENT?'test':'disabled',razorpay,supabase:{urlConfigured:Boolean(SB_URL),anonKey,serviceRoleKey}});
     }
     if(req.method==='GET'&&url.pathname==='/api/auth/me')return send(res,200,{user:safeUser(session.user)});
     if(req.method==='GET'&&url.pathname==='/api/cart')try{const rows=await supa(`carts?user_id=eq.${uid}&select=items&limit=1`,{token});return send(res,200,{items:rows?.[0]?.items||[]})}catch(e){return send(res,500,{error:e.message})}
