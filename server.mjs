@@ -103,12 +103,15 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
     if(req.method==='POST'&&url.pathname==='/api/orders')try{const d=await body(req);const result=await createOrder(uid,token,d);return send(res,201,result)}catch(e){return send(res,400,{error:e.message})}
     if(req.method==='POST'&&url.pathname==='/api/payments/order'){
       if(!TEST_PAYMENT||!KEY_SECRET)return send(res,503,{error:'Razorpay Test Mode keys are not configured (the key ID must begin rzp_test_).'});
-      let draft;
+      let draft,checkoutStage='read_request';
       try{
         const d=await body(req);
         // Keep the saved cart until Razorpay confirms a captured payment.
+        checkoutStage='save_order_draft';
         draft=await createOrder(uid,token,{...d,delivery_method:'Razorpay',status:'payment_pending'},{clearCart:false});
+        checkoutStage='create_razorpay_order';
         const rp=await razor('/orders','POST',{amount:draft.amount,currency:'INR',receipt:`gi_${crypto.randomBytes(8).toString('hex')}`});
+        checkoutStage='link_razorpay_order';
         const linked=await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(draft.id)}&user_id=eq.${encodeURIComponent(uid)}&status=eq.payment_pending`,{
           method:'PATCH',
           headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`,'Content-Type':'application/json',Prefer:'return=representation'},
@@ -116,14 +119,16 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
         });
         const linkedRows=await linked.json().catch(()=>[]);
         if(!linked.ok||!Array.isArray(linkedRows)||linkedRows.length!==1)throw new Error('Could not securely link the Razorpay order to your saved order.');
+        console.info('Payment checkout order initialized');
         return send(res,200,{orderId:rp.id,amount:rp.amount,currency:rp.currency,keyId:KEY_ID,dbOrderId:draft.id});
       }catch(e){
+        console.error('Payment checkout setup failed',{stage:checkoutStage,providerStatus:e.providerStatus||null,providerCode:e.providerCode||null});
         // Remove an unpaid draft if checkout setup failed; the customer's cart remains intact.
         if(draft?.id)await fetch(`${SB_URL}/rest/v1/orders?id=eq.${encodeURIComponent(draft.id)}&user_id=eq.${encodeURIComponent(uid)}&status=eq.payment_pending&payment_status=eq.pending`,{
           method:'DELETE',
           headers:{apikey:SB_SERVICE,Authorization:`Bearer ${SB_SERVICE}`}
         }).catch(()=>{});
-        return send(res,400,{error:e.message});
+        return send(res,400,{error:e.message,checkoutStage,providerStatus:e.providerStatus||null,providerCode:e.providerCode||null});
       }
     }
     if(req.method==='POST'&&url.pathname==='/api/payments/verify'){
