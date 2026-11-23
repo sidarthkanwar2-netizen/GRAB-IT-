@@ -17,7 +17,7 @@ window.grabitAuthCallback=(async()=>{
     const response=await fetch('/api/auth/session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({access_token:accessToken,refresh_token:refreshToken})});
     const result=await response.json().catch(()=>({}));
     if(!response.ok)throw new Error(result.error||'Email confirmation could not be completed. Please try logging in.');
-    return {confirmed:true};
+    return {confirmed:true,recovery:type==='recovery'};
   }catch(error){return {error:error.message||'Could not finish signing in. Please try logging in.'}}
 })();
 </script>
@@ -304,8 +304,12 @@ function drawer(){
   const T=tot(),b=$("bd"),f=$("ft");
   if(view==="auth"||view==="signup"){
     const signup=view==="signup";$("dt").textContent=signup?"Create your account":"Welcome back";
-    b.innerHTML=`${signup?'<div class="fld"><label for="an">Full name</label><input id="an" autocomplete="name" required></div><div class="fld"><label for="ap">Phone (10 digits)</label><input id="ap" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10" pattern="[6-9][0-9]{9}" required></div>':''}<div class="fld"><label for="ae">Email</label><input id="ae" type="email" autocomplete="email"></div><div class="fld"><label for="aw">Password</label><input id="aw" type="password" autocomplete="${signup?'new-password':'current-password'}" minlength="8"></div><p class="err" id="authErr" role="alert"></p>`;
+    b.innerHTML=`${signup?'<div class="fld"><label for="an">Full name</label><input id="an" autocomplete="name" required></div><div class="fld"><label for="ap">Phone (10 digits)</label><input id="ap" type="tel" inputmode="numeric" autocomplete="tel" maxlength="10" pattern="[6-9][0-9]{9}" required></div>':''}<div class="fld"><label for="ae">Email</label><input id="ae" type="email" autocomplete="email"></div><div class="fld"><label for="aw">Password</label><input id="aw" type="password" autocomplete="${signup?'new-password':'current-password'}" minlength="8"></div>${signup?"":"<button class="lnk" onclick="forgotPassword()">Forgot password?</button>"}<p class="err" id="authErr" role="alert"></p>`;
     f.innerHTML=`<button class="btn" onclick="submitAuth(${signup})">${signup?'Create account':'Log in'}</button><button class="lnk" onclick="show('${signup?'auth':'signup'}')">${signup?'Already have an account? Log in':'New here? Create an account'}</button>`;
+  }else if(view==="recovery"){
+    $("dt").textContent="Reset your password";
+    b.innerHTML=`<div class="fld"><label for="rp1">New password</label><input id="rp1" type="password" autocomplete="new-password" minlength="8" required></div><div class="fld"><label for="rp2">Confirm new password</label><input id="rp2" type="password" autocomplete="new-password" minlength="8" required></div><p class="err" id="authErr" role="alert"></p>`;
+    f.innerHTML=`<button class="btn" onclick="submitNewPassword()">Save new password</button><button class="lnk" onclick="show('auth')">Back to log in</button>`;
   }else if(view==="account"){
     $("dt").textContent="Your account";b.innerHTML=`<p>Signed in as <b>${esc(user?.email||'')}</b></p><button class="lnk" onclick="openAdmin()">Admin dashboard</button><p class="err" id="authErr" role="alert"></p>`;f.innerHTML=`<button class="btn" onclick="logout()">Log out</button><button class="lnk" onclick="show('cart')">View cart and orders</button>`;
   }else if(view==="admin"){
@@ -331,7 +335,9 @@ function saveOrder(o){
   orders.unshift(o);orders=orders.slice(0,10);
   cart={};persistCart();oid=o.id;badge();grid();show("track");refreshAccount();
 }
-async function submitAuth(signup){const er=$("authErr");try{const d={email:$("ae").value.trim(),password:$("aw").value};if(signup){d.name=$("an").value.trim();d.phone=$("ap").value.trim();if(!/^[6-9]\d{9}$/.test(d.phone)){er.textContent="Enter a valid 10-digit Indian mobile number.";return}}const out=await api(`/api/auth/${signup?'signup':'login'}`,{method:'POST',body:JSON.stringify(d)});if(out.needsEmailConfirmation){er.textContent=out.message;return}await refreshAccount();show('cart')}catch(e){er.textContent=e.message}}
+async function submitAuth(signup){const er=$("authErr");try{const d={email:$("ae").value.trim(),password:$("aw").value};if(signup){d.name=$("an").value.trim();d.phone=$("ap").value.trim();if(!/^[6-9]\d{9}$/.test(d.phone)){er.textContent="Enter a valid 10-digit Indian mobile number.";return}}const out=await api(`/api/auth/${signup?'signup':'login'}`,{method:'POST',body:JSON.stringify(d)});if(out.needsEmailConfirmation){er.textContent=out.message;return}await refreshAccount();show('cart')}catch(e){er.textContent=/invalid login credentials/i.test(e.message)?"That email and password did not match. Check your details, confirm your email if you just signed up, or choose Forgot password to reset it.":e.message}}
+async function forgotPassword(){const er=$("authErr"),email=$("ae").value.trim();if(!email){er.textContent="Enter your email address first.";return}try{const out=await api('/api/auth/recover',{method:'POST',body:JSON.stringify({email})});er.textContent=out.message||"If an account exists for that email, reset instructions were sent."}catch(e){er.textContent=e.message}}
+async function submitNewPassword(){const er=$("authErr"),password=$("rp1").value,confirm=$("rp2").value;if(password.length<8){er.textContent="Use at least 8 characters for your new password.";return}if(password!==confirm){er.textContent="The passwords do not match.";return}try{await api('/api/auth/password',{method:'POST',body:JSON.stringify({password})});await refreshAccount();show('account');const message=$("authErr");if(message)message.textContent="Password updated. You are signed in."}catch(e){er.textContent=e.message}}
 async function logout(){await api('/api/auth/logout',{method:'POST'});user=null;orders=[];$("accountBtn").textContent='Log in';show('auth')}
 async function openAdmin(){view='admin';drawer()}
 async function loadAdmin(){const b=$("bd");try{await api('/api/admin');const [o,p]=await Promise.all([api('/api/admin/orders'),api('/api/admin/products')]);adminProducts=p;b.innerHTML=`<h4>Orders</h4>${o.map(x=>`<div class="ln"><div><b>${esc(x.customer_name||x.id)}</b><small>${esc(x.delivery_method)} · ${rs(x.total)} · ${esc(x.status)}</small></div><select onchange="setOrderStatus('${x.id}',this.value)"><option ${x.status==='payment_pending'?'selected':''}>payment_pending</option><option ${x.status==='received'?'selected':''}>received</option><option ${x.status==='packing'?'selected':''}>packing</option><option ${x.status==='out_for_delivery'?'selected':''}>out_for_delivery</option><option ${x.status==='delivered'?'selected':''}>delivered</option><option ${x.status==='cancelled'?'selected':''}>cancelled</option></select></div>`).join('')||'<p>No orders yet.</p>'}<h4>Products</h4>${p.filter(x=>x.active).map(x=>`<div class="ln"><div><b>${esc(x.name)}</b><small>${rs(x.price)} · stock ${x.stock}</small></div><button class="q w" onclick="editProduct(${x.id})">Edit</button><button class="q w" onclick="deleteProduct(${x.id})">Remove</button></div>`).join('')}<p><button class="btn" onclick="editProduct()">Add product</button></p><p class="err" id="adminErr"></p>`}catch(e){b.innerHTML=`<p class="err">${esc(e.message)}</p>`}}
@@ -371,7 +377,8 @@ async function bootstrap(){
   tabs();grid();badge();
   const callback=await window.grabitAuthCallback;
   await Promise.all([refreshAccount(),refreshCatalog()]);
-  if(callback?.confirmed&&user){show('account');const message=$('authErr');if(message)message.textContent='Email confirmed. You’re signed in.'}
+  if(callback?.recovery&&user){show('recovery');const message=$('authErr');if(message)message.textContent='Choose a new password to finish the reset.'}
+  else if(callback?.confirmed&&user){show('account');const message=$('authErr');if(message)message.textContent='Email confirmed. You’re signed in.'}
   else if(callback?.error){show('auth');const message=$('authErr');if(message)message.textContent=callback.error}
 }
 bootstrap();
