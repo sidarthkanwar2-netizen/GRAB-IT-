@@ -165,7 +165,27 @@ nav,.hero,.cart,footer{background-color:#18254c}
 .hero::before{background:radial-gradient(ellipse at 78% 30%,rgba(72,190,230,.2),transparent 36%),linear-gradient(120deg,transparent 54%,rgba(255,255,255,.035) 54%)}
 .hero-art{background:linear-gradient(145deg,#9be5f5,#ffe29b)}.hero-art::before{background:#fffdf4;box-shadow:0 12px 38px #30457729}.art-orbit{border-color:#586f9a55}.art-label{color:#47577d}.hero-sticker{background:#ff805f;color:#fff;box-shadow:0 7px 20px #663d4544}.hero-sticker strong{color:#fff1b7}.delivery-pill{background:#fff;color:#26396f}
 .btn{background:#ffd166;color:#18254c}.btn:hover{background:#ffc64b}.btn.ghost{background:rgba(255,255,255,.04)}
-.sec-tag{color:#6576a5}.step .n{background:#dff5ff;color:#20527a}.step:hover,.item:hover{border-color:#bacaf6;box-shadow:0 15px 35px #26396f18}.item .ic{background:#edf4ff}.tab[aria-pressed="true"]{background:#ffd166;color:#18254c;border-color:#ffd166}.card{background:#26396f;border-color:#3d5190}.card h3{color:#ffd166}.why li::before{background:#ffd166}.tl .step{border-top-color:#54c4df}.dark{background-color:#18254c}.join{background-color:#ffd166;background-image:radial-gradient(#30457718 .7px,transparent .7px)}.join .btn{background:#18254c;color:#ffd166}.join .lead{color:#445277}footer{background:#18254c}</style>
+.sec-tag{color:#6576a5}.step .n{background:#dff5ff;color:#20527a}.step:hover,.item:hover{border-color:#bacaf6;box-shadow:0 15px 35px #26396f18}.item .ic{background:#edf4ff}.tab[aria-pressed="true"]{background:#ffd166;color:#18254c;border-color:#ffd166}.card{background:#26396f;border-color:#3d5190}.card h3{color:#ffd166}.why li::before{background:#ffd166}.tl .step{border-top-color:#54c4df}.dark{background-color:#18254c}.join{background-color:#ffd166;background-image:radial-gradient(#30457718 .7px,transparent .7px)}.join .btn{background:#18254c;color:#ffd166}.join .lead{color:#445277}footer{background:#18254c}
+/* Cleaner controls and product cards */
+.fld input:not([type="radio"]),.fld select{width:100%;min-height:46px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);font:500 15px var(--body)}
+.fld input::placeholder,.srch::placeholder{color:var(--muted);opacity:.82}
+.fld input:focus-visible,.fld select:focus-visible,.srch:focus-visible{border-color:#8da746;outline:3px solid #8da74635;outline-offset:1px}
+.rd{align-items:center;gap:10px}
+.rd input[type="radio"]{accent-color:#657f20}
+.bar{gap:12px;margin-bottom:20px}
+.tabs{gap:8px}
+.tab{border-radius:14px;padding:9px 14px}
+.srch{border-radius:14px;min-height:46px;padding-inline:15px}
+.grid{gap:16px}
+.item{min-height:218px;padding:18px;gap:8px;border-radius:18px}
+.item b{line-height:1.35;min-height:2.7em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.item .pr{margin-top:0}
+.item button{width:100%;min-height:40px;align-self:stretch;margin-top:auto;border:1px solid var(--line);border-radius:12px;padding:8px 12px;background:var(--bg);color:var(--navy)}
+.item button:hover{background:var(--lime);border-color:var(--lime);color:var(--lime-ink)}
+.item .qty{justify-content:flex-start}
+@media(max-width:760px){.grid{gap:11px}.item{min-height:210px;padding:14px}.bar{gap:10px}}
+
+</style>
 </head>
 <body>
 <nav><div class="wrap">
