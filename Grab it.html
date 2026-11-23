@@ -185,6 +185,14 @@ nav,.hero,.cart,footer{background-color:#18254c}
 .item .qty{justify-content:flex-start}
 @media(max-width:760px){.grid{gap:11px}.item{min-height:210px;padding:14px}.bar{gap:10px}}
 
+
+/* Catalog product photography */
+.item{overflow:hidden}
+.item .product-photo{position:relative;display:grid;place-items:center;height:116px;margin:-18px -18px 8px;overflow:hidden;border-radius:15px 15px 11px 11px;background:linear-gradient(135deg,#edf4e5,#dfe9d8)}
+.product-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;transition:transform .28s ease}
+.item:hover .product-photo img{transform:scale(1.035)}
+.product-photo-fallback{font-size:40px;line-height:1}
+@media(max-width:760px){.item .product-photo{height:94px;margin:-14px -14px 7px;border-radius:14px 14px 10px 10px}.product-photo-fallback{font-size:34px}}
 </style>
 </head>
 <body>
@@ -292,6 +300,16 @@ const P=[
 ["Printing needs","🖨️","B&W printout","per page",2],["Printing needs","🌈","Colour printout","per page",8],["Printing needs","📎","Spiral binding","per report",40],["Printing needs","🗂️","Assignment folder","each",45],["Printing needs","📐","Chart paper","sheet",20],
 ["Campus extras","🔦","Torch","each",120],["Campus extras","🗒️","Sticky notes","pad",40],["Campus extras","🌂","Umbrella","each",250],["Campus extras","🎒","Water bottle","750 ml",150],["Campus extras","📌","Stapler + pins","set",70]
 ];
+// Free, brand-neutral Pexels stock photos mapped to the seeded catalog IDs.
+const PRODUCT_PHOTOS={
+  0:5860659,1:7531578,2:18127545,3:7033652,4:10823180,
+  5:5554753,6:5905439,7:4792285,8:4614109,9:6340709,
+  10:6726749,11:7011668,12:14788073,13:18641665,14:9058886,
+  15:5420585,16:11309671,17:5420585,18:35539861,19:6689393,
+  20:4792283,21:8166563,22:7054751,23:6620969,24:8478387,
+  25:733087,26:6340709,27:28010943,28:18381807,29:8970649
+};
+const productPhoto=id=>`https://images.pexels.com/photos/${id}/pexels-photo-${id}.jpeg?auto=compress&cs=tinysrgb&w=640&h=420`;
 const CATS=["All",...new Set(P.map(p=>p[0]))],DROPS=["Hostel Block A gate","Hostel Block B gate","Hostel Block C gate","Library entrance","Academic block lobby","Canteen","Staff room corridor"],LB=["Order received","Being packed","Out for delivery","Delivered"];
 let cat="All",q="",cart={},view="cart",oid="",orders=[],user=null;
 let adminProducts=[];
@@ -311,7 +329,7 @@ function badge(){const n=tot().n;$("nc").textContent=n;$("count").textContent=n+
 function tabs(){$("tabs").innerHTML=CATS.map((c,k)=>`<button class="tab" aria-pressed="${c===cat}" onclick="cat=CATS[${k}];tabs();grid()">${esc(c)}</button>`).join("")}
 function grid(){
   const L=P.map((p,i)=>[p,i]).filter(([p])=>p.active!==false&&(cat==="All"||p[0]===cat)&&p[2].toLowerCase().includes(q));
-  $("grid").innerHTML=L.length?L.map(([p,i])=>`<div class="item"><span class="ic">${p[1]}</span><b>${esc(p[2])}</b><small>${p[3]}</small><div class="pr">${rs(p[4])}</div>${cart[i]?qty(i):p.stock===0?'<small>Out of stock</small>':`<button onclick="chg(${i},1)">+ Add</button>`}</div>`).join(""):'<p class="note">No items match your search.</p>';
+  $("grid").innerHTML=L.length?L.map(([p,i])=>`<div class="item"><div class="product-photo"><span class="product-photo-fallback" aria-hidden="true">${p[1]}</span>${PRODUCT_PHOTOS[i]?`<img src="${productPhoto(PRODUCT_PHOTOS[i])}" alt="Photo of ${esc(p[2])}" loading="lazy" decoding="async" onerror="this.remove()">`:''}</div><b>${esc(p[2])}</b><small>${p[3]}</small><div class="pr">${rs(p[4])}</div>${cart[i]?qty(i):p.stock===0?'<small>Out of stock</small>':`<button onclick="chg(${i},1)">+ Add</button>`}</div>`).join(""):'<p class="note">No items match your search.</p>';
 }
 const qty=i=>`<div class="qty"><button class="q" onclick="chg(${i},-1)" aria-label="Remove one">−</button><b>${cart[i]}</b><button class="q" onclick="chg(${i},1)" aria-label="Add one">+</button></div>`;
 function chg(i,d){cart[i]=(cart[i]||0)+d;if(cart[i]<=0)delete cart[i];persistCart();badge();grid();if(view==="cart")drawer()}
