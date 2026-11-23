@@ -11,6 +11,7 @@ if (fs.existsSync(envPath)) for (const line of fs.readFileSync(envPath,'utf8').s
   const m=line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/); if(m&&!process.env[m[1]])process.env[m[1]]=m[2].replace(/^['"]|['"]$/g,'');
 }
 const PORT=Number(process.env.PORT||3000), MAX_BODY=65536;
+const APP_URL=(process.env.PUBLIC_APP_URL||(process.env.NODE_ENV==='production'?'https://grabit-node.onrender.com':'http://localhost:3000')).replace(/\/$/,'');
 const SB_URL=(process.env.SUPABASE_URL||'').replace(/\/$/,''), SB_KEY=process.env.SUPABASE_ANON_KEY||process.env.SUPABASE_PUBLISHABLE_KEY||'', SB_SERVICE=process.env.SUPABASE_SERVICE_ROLE_KEY||'';
 const KEY_ID=process.env.RAZORPAY_KEY_ID||'', KEY_SECRET=process.env.RAZORPAY_KEY_SECRET||'', WEBHOOK_SECRET=process.env.RAZORPAY_WEBHOOK_SECRET||'';
 const TEST_PAYMENT=KEY_ID.startsWith('rzp_test_');
@@ -93,11 +94,33 @@ async function handle(req,res){const url=new URL(req.url,'http://localhost');
   if(req.method==='POST'&&url.pathname==='/api/auth/signup'||req.method==='POST'&&url.pathname==='/api/auth/login'){
     try{const d=await body(req);if(req.url.includes('signup')){const name=String(d.name||'').trim().slice(0,100),phone=String(d.phone||'').trim();if(!name)throw new Error('Enter your name.');if(!/^[6-9]\d{9}$/.test(phone))throw new Error('Enter a valid 10-digit Indian mobile number.');const out=await auth('/signup',{email:String(d.email||'').trim(),password:String(d.password||''),data:{full_name:name,phone}});if(!out.access_token)return send(res,200,{needsEmailConfirmation:true,message:'Check your email to confirm your account, then log in.'});const secure=process.env.NODE_ENV==='production'?'; Secure':'';return send(res,200,{user:safeUser(out.user)},'application/json; charset=utf-8',{'Set-Cookie':[`grabitr_session=${out.access_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${out.expires_in||3600}${secure}`,`grabitr_refresh=${out.refresh_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`]})}
       const out=await auth('/token?grant_type=password',{email:String(d.email||'').trim(),password:String(d.password||'')});const secure=process.env.NODE_ENV==='production'?'; Secure':'';return send(res,200,{user:safeUser(out.user)},'application/json; charset=utf-8',{'Set-Cookie':[`grabitr_session=${out.access_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${out.expires_in||3600}${secure}`,`grabitr_refresh=${out.refresh_token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`]});
-    }catch(e){return send(res,400,{error:e.message})}
+    }catch(e){const message=/invalid login credentials/i.test(e.message)?'That email and password did not match. Check your details, confirm your email if you just signed up, or use Forgot password to reset it.':e.message;return send(res,400,{error:message})}
+  }
+  if(req.method==='POST'&&url.pathname==='/api/auth/recover'){
+    if(!SB_URL||!SB_KEY)return send(res,503,{error:'Password reset is not configured.'});
+    try{
+      const d=await body(req),email=String(d.email||'').trim().toLowerCase();
+      if(email.length>254||!/^\S+@\S+\.\S+$/.test(email))return send(res,400,{error:'Enter a valid email address.'});
+      await auth(`/recover?redirect_to=${encodeURIComponent(APP_URL)}`,{email});
+      return send(res,200,{ok:true,message:'If an account exists for that email, reset instructions have been sent.'});
+    }catch(e){
+      if(/rate limit|too many requests/i.test(e.message))return send(res,429,{error:'Please wait before requesting another reset email.'});
+      return send(res,400,{error:'Could not send a password reset email. Please try again later.'});
+    }
   }
   if(req.method==='POST'&&url.pathname==='/api/auth/logout')return send(res,200,{ok:true},'application/json; charset=utf-8',{'Set-Cookie':['grabitr_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0','grabitr_refresh=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0']});
   if(url.pathname.startsWith('/api/')&&url.pathname!=='/api/config'){
     let session;try{session=await current(req,res)}catch{}if(!session)return send(res,401,{error:'Please log in to continue.'});const uid=session.user.id,token=session.token;
+    if(req.method==='POST'&&url.pathname==='/api/auth/password'){
+      try{
+        const d=await body(req),password=String(d.password||'');
+        if(password.length<8||password.length>128)return send(res,400,{error:'Use a password between 8 and 128 characters.'});
+        const response=await fetch(`${SB_URL}/auth/v1/user`,{method:'PUT',headers:{apikey:SB_KEY,Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({password}),signal:AbortSignal.timeout(10000)});
+        const result=await response.json().catch(()=>({}));
+        if(!response.ok)return send(res,400,{error:result.msg||result.message||'Could not update the password.'});
+        return send(res,200,{ok:true});
+      }catch(e){return send(res,400,{error:e.message||'Could not update the password.'})}
+    }
     if(req.method==='GET'&&url.pathname==='/api/payments/diagnostic'){
       const razorpay={configured:Boolean(TEST_PAYMENT&&KEY_SECRET),valid:false,status:null,code:null};
       if(razorpay.configured)try{await razor('/orders?count=1');razorpay.valid=true;razorpay.status=200}catch(e){razorpay.status=e.providerStatus||null;razorpay.code=e.providerCode||null}
